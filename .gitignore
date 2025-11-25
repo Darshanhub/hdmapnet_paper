@@ -5,6 +5,7 @@ __pycache__/
 *.pyd
 *.jpg
 *.jpeg
+*.pt
 env/
 venv/
 ENV/
