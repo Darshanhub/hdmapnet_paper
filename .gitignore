@@ -11,3 +11,6 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+dataset/
+artifacts/checkpoints/
+third_party/HDMapNet/
