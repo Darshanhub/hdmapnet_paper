@@ -6,10 +6,15 @@ import argparse
 from pathlib import Path
 import sys
 
-# Allow importing run_inference when executed from the repository root or scripts/.
+# Allow importing run_inference + HDMapNet modules even when the script is invoked via
+# "python hdmapnet_paper/scripts/run_colab.py" from outside the repo root.
 SCRIPT_DIR = Path(__file__).resolve().parent
-if str(SCRIPT_DIR) not in sys.path:
-    sys.path.insert(0, str(SCRIPT_DIR))
+REPO_ROOT = SCRIPT_DIR.parent
+THIRD_PARTY_DIR = REPO_ROOT / "third_party" / "HDMapNet"
+
+for path in (SCRIPT_DIR, REPO_ROOT, THIRD_PARTY_DIR):
+    if path.exists() and str(path) not in sys.path:
+        sys.path.insert(0, str(path))
 
 import run_inference  # type: ignore
 

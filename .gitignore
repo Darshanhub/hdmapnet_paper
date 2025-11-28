@@ -1,4 +1,5 @@
 .venv
+.venv1
 __pycache__/
 *.pyc
 *.pyo
@@ -11,6 +12,7 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+*.ipynb
 dataset/
 artifacts/checkpoints/
 third_party/HDMapNet/
