@@ -41,6 +41,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--force-cpu", action="store_true", help="Force CPU execution even if GPU is available")
     parser.add_argument("--dry-run", action="store_true",
                         help="Only validate checkpoint + dependencies without touching the dataset")
+    parser.add_argument("--skip_model_load", action="store_true",
+                        help="Skip loading the torch model (just validate dataset + config)")
     parser.add_argument("--extra", nargs=argparse.REMAINDER,
                         help="Additional flags forwarded to scripts/run_inference.py (optional)")
     return parser
@@ -60,6 +62,7 @@ def assemble_runner_args(colab_args: argparse.Namespace) -> argparse.Namespace:
     args.nworkers = colab_args.nworkers
     args.force_cpu = colab_args.force_cpu
     args.dry_run = colab_args.dry_run
+    args.skip_model_load = colab_args.skip_model_load
 
     if colab_args.image_dir:
         args.image_dir = colab_args.image_dir

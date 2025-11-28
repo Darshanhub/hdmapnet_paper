@@ -7,7 +7,7 @@ import json
 import os
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple, cast
 
 import matplotlib  # type: ignore
 
@@ -254,6 +254,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--limit", type=int, default=10, help="Number of validation samples to process (<=0 = all)")
     parser.add_argument("--force-cpu", action="store_true", help="Run everything on CPU even if CUDA is available")
     parser.add_argument("--dry-run", action="store_true", help="Only load the checkpoint to verify dependencies")
+    parser.add_argument("--skip_model_load", action="store_true",
+                        help="Skip constructing/loading the torch model; useful for local validation without heavy memory usage")
 
     # data + model hyper-parameters (mirror train.py defaults)
     parser.add_argument("--thickness", type=int, default=5)
@@ -272,7 +274,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
 def main(args: argparse.Namespace) -> None:
     checkpoint = Path(args.modelf)
     if not checkpoint.exists():
-        raise FileNotFoundError(f"Checkpoint not found: {checkpoint}. Drop your model.pt under artifacts/checkpoints/")
+        if args.skip_model_load:
+            print(f"Warning: checkpoint not found at {checkpoint} (skip_model_load is enabled, continuing anyway)")
+        else:
+            raise FileNotFoundError(f"Checkpoint not found: {checkpoint}. Drop your model.pt under artifacts/checkpoints/")
 
     device = torch.device("cpu" if args.force_cpu or not torch.cuda.is_available() else "cuda")
 
@@ -287,6 +292,12 @@ def main(args: argparse.Namespace) -> None:
         "angle_class": args.angle_class,
     }
 
+    if args.skip_model_load:
+        val_loader, data_source_desc = build_validation_loader(args, data_conf)
+        dataset_size = len(cast(Any, val_loader.dataset))
+        print(f"skip_model_load=True → validated {dataset_size} samples from {data_source_desc} and exiting before model init.")
+        return
+
     model = get_model(args.model, data_conf, args.instance_seg, args.embedding_dim, args.direction_pred, args.angle_class)
     state = torch.load(checkpoint, map_location=device)
     model.load_state_dict(state, strict=False)
@@ -298,7 +309,8 @@ def main(args: argparse.Namespace) -> None:
         return
 
     val_loader, data_source_desc = build_validation_loader(args, data_conf)
-    print(f"Using {len(val_loader.dataset)} samples from {data_source_desc}")
+    dataset_size = len(cast(Any, val_loader.dataset))  # torch Dataset implements __len__ at runtime
+    print(f"Using {dataset_size} samples from {data_source_desc}")
 
     dx, bx = gen_dx_bx(args.xbound, args.ybound)
     output_dirs = ensure_dirs(Path(args.output_dir))
@@ -318,6 +330,7 @@ def main(args: argparse.Namespace) -> None:
     processed = 0
 
     progress = tqdm.tqdm(val_loader, desc="Running inference", dynamic_ncols=True)
+    effective_batch_size = val_loader.batch_size or args.bsz
     with torch.no_grad():
         for batch_idx, batch in enumerate(progress):
             (imgs, trans, rots, intrins, post_trans, post_rots,
@@ -345,8 +358,9 @@ def main(args: argparse.Namespace) -> None:
                                                             direction[sample_in_batch],
                                                             args.angle_class)
                 canvas_shape = segmentation.shape[-2:]
-                sample_idx = batch_idx * val_loader.batch_size + sample_in_batch
-                rec = val_loader.dataset.samples[sample_idx]
+                sample_idx = batch_idx * effective_batch_size + sample_in_batch
+                dataset_obj = cast(Any, val_loader.dataset)  # may be custom dataset with samples attr
+                rec = dataset_obj.samples[sample_idx]
                 token = rec["token"]
 
                 vectors = []
