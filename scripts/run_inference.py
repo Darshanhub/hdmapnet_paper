@@ -33,6 +33,26 @@ from torch.utils.data import DataLoader, Dataset  # type: ignore  # noqa: E402
 # Make third_party/HDMapNet importable without modifying PYTHONPATH globally.
 REPO_ROOT = Path(__file__).resolve().parents[1]
 HDMAPNET_DIR = REPO_ROOT / "third_party" / "HDMapNet"
+
+
+def _filter_foreign_hdmapnet_paths() -> None:
+    vendor_root = HDMAPNET_DIR.resolve()
+    new_sys_path = []
+    for entry in sys.path:
+        try:
+            entry_path = Path(entry).resolve()
+        except Exception:
+            new_sys_path.append(entry)
+            continue
+        if entry_path.name != "HDMapNet" and "HDMapNet" not in entry_path.parts:
+            new_sys_path.append(entry)
+            continue
+        if str(entry_path).startswith(str(vendor_root)):
+            new_sys_path.append(entry)
+    sys.path[:] = new_sys_path
+
+
+_filter_foreign_hdmapnet_paths()
 if str(HDMAPNET_DIR) not in sys.path:
     sys.path.insert(0, str(HDMAPNET_DIR))
 
