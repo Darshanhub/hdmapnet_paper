@@ -351,7 +351,13 @@ def main(args: argparse.Namespace) -> None:
             segmentation, embedding, direction = model(imgs, trans, rots, intrins,
                                                         post_trans, post_rots, lidar_data,
                                                         lidar_mask, car_trans, yaw_pitch_roll)
-
+            if embedding is None:
+                import torch
+                embedding = torch.zeros(
+                    (segmentation.shape[0], 1, *segmentation.shape[-2:]),
+                    device=segmentation.device,
+                    dtype=segmentation.dtype,
+                )
             for sample_in_batch in range(segmentation.shape[0]):
                 coords, confidences, line_types = vectorize(segmentation[sample_in_batch],
                                                             embedding[sample_in_batch],
