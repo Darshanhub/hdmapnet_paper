@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import inspect
 import json
 import math
 import os
@@ -464,13 +465,20 @@ def main(args: argparse.Namespace) -> None:
         print(f"skip_model_load=True → validated {dataset_size} samples from {data_source_desc} and exiting before model init.")
         return
 
-    model = get_model(args.model,
-                      data_conf,
-                      args.instance_seg,
-                      args.embedding_dim,
-                      args.direction_pred,
-                      args.angle_class,
-                      data_aug_conf)
+    get_model_params = inspect.signature(get_model).parameters
+    model_kwargs = {
+        "instance_seg": args.instance_seg,
+        "embedded_dim": args.embedding_dim,
+        "direction_pred": args.direction_pred,
+        "angle_class": args.angle_class,
+    }
+    if "data_aug_conf" in get_model_params:
+        model_kwargs["data_aug_conf"] = data_aug_conf
+    else:
+        if args.model == "lift_splat":
+            print("Warning: get_model() in third_party/HDMapNet/model/__init__.py is missing data_aug_conf support. "
+                  "Please pull the latest changes. Falling back to legacy signature without augmentation metadata.")
+    model = get_model(args.model, data_conf, **model_kwargs)
     state = torch.load(checkpoint, map_location=device)
     model.load_state_dict(state, strict=False)
     model.to(device)
