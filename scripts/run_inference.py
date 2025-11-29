@@ -352,7 +352,6 @@ def main(args: argparse.Namespace) -> None:
                                                         post_trans, post_rots, lidar_data,
                                                         lidar_mask, car_trans, yaw_pitch_roll)
             if embedding is None:
-                import torch
                 embedding = torch.zeros(
                     (segmentation.shape[0], 1, *segmentation.shape[-2:]),
                     device=segmentation.device,
