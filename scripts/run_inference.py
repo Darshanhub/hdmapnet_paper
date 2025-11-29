@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple, cast
@@ -14,6 +15,7 @@ import matplotlib  # type: ignore
 matplotlib.use("Agg")  # headless rendering
 import matplotlib.pyplot as plt  # type: ignore  # noqa: E402
 import matplotlib.patches as patches  # type: ignore  # noqa: E402
+import matplotlib.colors as mcolors  # type: ignore  # noqa: E402
 import numpy as np  # type: ignore  # noqa: E402
 
 # Third-party HDMapNet utilities still reference deprecated numpy aliases (e.g., np.int).
@@ -33,7 +35,7 @@ if str(HDMAPNET_DIR) not in sys.path:
 
 from data.dataset import semantic_dataset  # type: ignore  # noqa: E402
 from data.const import CAMS, IMG_ORIGIN_H, IMG_ORIGIN_W, NUM_CLASSES  # type: ignore  # noqa: E402
-from data.image import normalize_img, img_transform  # type: ignore  # noqa: E402
+from data.image import normalize_img, img_transform, denormalize_img  # type: ignore  # noqa: E402
 from model import get_model  # type: ignore  # noqa: E402
 from postprocess.vectorize import vectorize  # type: ignore  # noqa: E402
 
@@ -47,6 +49,12 @@ CLASS_COLORS = {
     1: "tab:blue",
     2: "tab:green",
 }
+
+BACKGROUND_COLOR = (45, 45, 45)
+CLASS_CHANNEL_TO_COLOR: Dict[int, Tuple[int, int, int]] = {0: BACKGROUND_COLOR}
+for class_idx, color_name in CLASS_COLORS.items():
+    r, g, b = (int(c * 255) for c in mcolors.to_rgb(color_name))
+    CLASS_CHANNEL_TO_COLOR[class_idx + 1] = (r, g, b)
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp"}
 
@@ -223,6 +231,81 @@ def draw_prediction(sample_id: str,
     plt.close(fig)
 
 
+def _tensor_to_pil_image(tensor: torch.Tensor) -> Image.Image:
+    return denormalize_img(tensor.detach().cpu())
+
+
+def _render_segmentation(segmentation: torch.Tensor) -> Image.Image:
+    probs = torch.softmax(segmentation.detach().cpu(), dim=0)
+    pred = torch.argmax(probs, dim=0).numpy()
+    color_img = np.zeros((*pred.shape, 3), dtype=np.uint8)
+    for channel, rgb in CLASS_CHANNEL_TO_COLOR.items():
+        mask = pred == channel
+        if np.any(mask):
+            color_img[mask] = rgb
+    return Image.fromarray(color_img, mode="RGB")
+
+
+def _render_confidence(segmentation: torch.Tensor) -> Image.Image:
+    probs = torch.softmax(segmentation.detach().cpu(), dim=0)
+    conf = torch.max(probs, dim=0)[0].numpy()
+    conf_img = (np.clip(conf, 0.0, 1.0) * 255).astype(np.uint8)
+    return Image.fromarray(conf_img, mode="L")
+
+
+def _render_embedding_norm(embedding: torch.Tensor) -> Image.Image:
+    emb = torch.norm(embedding.detach().cpu(), dim=0)
+    emb = emb / (emb.max() + 1e-8)
+    emb_img = (emb.numpy() * 255).astype(np.uint8)
+    return Image.fromarray(emb_img, mode="L")
+
+
+def _render_direction(direction: torch.Tensor, angle_class: int) -> Image.Image:
+    direction = torch.softmax(direction.detach().cpu(), dim=0)
+    pred = torch.argmax(direction, dim=0).numpy()
+    denom = max(angle_class - 1, 1)
+    dir_img = (pred.astype(np.float32) / denom * 255).astype(np.uint8)
+    return Image.fromarray(dir_img, mode="L")
+
+
+def save_debug_artifacts(token: str,
+                         cams: torch.Tensor,
+                         segmentation: torch.Tensor,
+                         embedding: torch.Tensor,
+                         direction: torch.Tensor,
+                         vector_image_path: Path,
+                         debug_dir: Path,
+                         angle_class: int) -> None:
+    debug_dir.mkdir(parents=True, exist_ok=True)
+
+    cam0 = cams[0]
+    input_img_path = debug_dir / f"{token}_input_cam0.png"
+    _tensor_to_pil_image(cam0).save(input_img_path)
+
+    seg_map_path = debug_dir / f"{token}_segmentation.png"
+    _render_segmentation(segmentation).save(seg_map_path)
+
+    conf_map_path = debug_dir / f"{token}_confidence.png"
+    _render_confidence(segmentation).save(conf_map_path)
+
+    embed_map_path = debug_dir / f"{token}_embedding_norm.png"
+    _render_embedding_norm(embedding).save(embed_map_path)
+
+    direction_map_path = debug_dir / f"{token}_direction.png"
+    _render_direction(direction, angle_class).save(direction_map_path)
+
+    if vector_image_path.exists():
+        shutil.copy(vector_image_path, debug_dir / f"{token}_vectorized.png")
+
+    tensor_dump = debug_dir / f"{token}_tensors.pt"
+    torch.save({
+        "token": token,
+        "segmentation": segmentation.detach().cpu(),
+        "embedding": embedding.detach().cpu(),
+        "direction": direction.detach().cpu(),
+    }, tensor_dump)
+
+
 def save_json(sample_token: str,
               vectors: List[Dict[str, object]],
               submission: Dict[str, Any],
@@ -257,6 +340,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output_dir", type=str, default="outputs",
                         help="Directory to write json + images")
     parser.add_argument("--limit", type=int, default=10, help="Number of validation samples to process (<=0 = all)")
+    parser.add_argument("--debug_dir", type=str, default=None,
+                        help="Optional directory to dump debug inputs/intermediates (defaults to output_dir/debugging)")
+    parser.add_argument("--debug_limit", type=int, default=0,
+                        help="How many samples to capture in debug_dir (<=0 disables)")
     parser.add_argument("--force-cpu", action="store_true", help="Run everything on CPU even if CUDA is available")
     parser.add_argument("--dry-run", action="store_true", help="Only load the checkpoint to verify dependencies")
     parser.add_argument("--skip_model_load", action="store_true",
@@ -271,8 +358,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dbound", nargs=3, type=float, default=[4.0, 45.0, 1.0])
     parser.add_argument("--angle_class", type=int, default=36)
     parser.add_argument("--embedding_dim", type=int, default=16)
-    parser.add_argument("--instance_seg", action="store_true", help="Enable instance embedding head")
-    parser.add_argument("--direction_pred", action="store_true", help="Enable direction prediction head")
+    parser.add_argument("--instance_seg", dest="instance_seg", action="store_true", default=True,
+                        help="Enable instance embedding head (default: enabled)")
+    parser.add_argument("--no-instance-seg", dest="instance_seg", action="store_false",
+                        help="Disable instance embedding head")
+    parser.add_argument("--direction_pred", dest="direction_pred", action="store_true", default=True,
+                        help="Enable direction prediction head (default: enabled)")
+    parser.add_argument("--no-direction-pred", dest="direction_pred", action="store_false",
+                        help="Disable direction prediction head")
     return parser
 
 
@@ -329,6 +422,15 @@ def main(args: argparse.Namespace) -> None:
         },
         "results": {},
     }
+
+    debug_dir: Optional[Path]
+    if args.debug_limit > 0:
+        debug_dir = Path(args.debug_dir) if args.debug_dir else Path(args.output_dir) / "debugging"
+        debug_dir.mkdir(parents=True, exist_ok=True)
+    else:
+        debug_dir = None
+    debug_limit = max(0, args.debug_limit)
+    debug_saved = 0
 
     summary_rows: List[Dict[str, object]] = []
     sample_cap = None if args.limit <= 0 else args.limit
@@ -405,6 +507,19 @@ def main(args: argparse.Namespace) -> None:
                     "json_path": str(per_sample_json),
                 }
                 summary_rows.append(summary_row)
+
+                if debug_dir is not None and debug_saved < debug_limit:
+                    save_debug_artifacts(
+                        token=token,
+                        cams=imgs[sample_in_batch],
+                        segmentation=segmentation[sample_in_batch],
+                        embedding=embedding[sample_in_batch],
+                        direction=direction[sample_in_batch],
+                        vector_image_path=image_path,
+                        debug_dir=debug_dir,
+                        angle_class=args.angle_class,
+                    )
+                    debug_saved += 1
 
                 processed += 1
                 progress.set_postfix(samples=processed)
