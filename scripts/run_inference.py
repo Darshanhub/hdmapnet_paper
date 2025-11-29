@@ -66,6 +66,47 @@ for _module_name in ("model", "data", "postprocess"):
     _purge_foreign_module(_module_name)
 
 
+def _patch_camencode_if_needed(module: ModuleType) -> None:
+    try:
+        base_module = importlib.import_module(f"{module.__name__}.base")
+    except ImportError:
+        return
+    camencode_cls = getattr(base_module, "CamEncode", None)
+    if camencode_cls is None or getattr(camencode_cls, "_flexible_signature", False):
+        return
+    try:
+        cam_sig = inspect.signature(camencode_cls.__init__)
+    except (TypeError, ValueError):
+        return
+    cam_params = list(cam_sig.parameters.values())[1:]
+    if len(cam_params) > 1:
+        return
+
+    class FlexibleCamEncode(camencode_cls):
+        _flexible_signature = True  # type: ignore[attr-defined]
+
+        def __init__(self, *args: Any, **kwargs: Any) -> None:  # type: ignore[override]
+            if len(args) == 1:
+                C = args[0]
+            elif len(args) >= 3:
+                C = args[1]
+            elif "C" in kwargs:
+                C = kwargs["C"]
+            elif "camC" in kwargs:
+                C = kwargs["camC"]
+            else:
+                raise ValueError("Unable to determine channel dimension for CamEncode")
+            super().__init__(C)
+
+    base_module.CamEncode = FlexibleCamEncode  # type: ignore[attr-defined]
+    try:
+        lift_splat_module = importlib.import_module(f"{module.__name__}.lift_splat")
+        lift_splat_module.CamEncode = FlexibleCamEncode  # type: ignore[attr-defined]
+    except ImportError:
+        pass
+    setattr(module, "CamEncode", FlexibleCamEncode)
+
+
 def _load_local_hdmapnet_model() -> ModuleType:
     module_name = "model"
     module_dir = HDMAPNET_DIR / module_name
@@ -75,6 +116,7 @@ def _load_local_hdmapnet_model() -> ModuleType:
         if spec is None:
             raise ImportError(f"HDMapNet model package not found at {init_file} and no '{module_name}' module on sys.path")
         module = importlib.import_module(module_name)
+        _patch_camencode_if_needed(module)
         return module
     spec = importlib.util.spec_from_file_location(
         module_name,
@@ -86,6 +128,7 @@ def _load_local_hdmapnet_model() -> ModuleType:
     module = importlib.util.module_from_spec(spec)
     sys.modules[module_name] = module
     spec.loader.exec_module(module)
+    _patch_camencode_if_needed(module)
     return module
 
 
