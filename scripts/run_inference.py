@@ -454,6 +454,9 @@ def main(args: argparse.Namespace) -> None:
         "thickness": args.thickness,
         "angle_class": args.angle_class,
     }
+    data_aug_conf = {
+        "final_dim": tuple(args.image_size),
+    }
 
     if args.skip_model_load:
         val_loader, data_source_desc = build_validation_loader(args, data_conf)
@@ -461,7 +464,13 @@ def main(args: argparse.Namespace) -> None:
         print(f"skip_model_load=True → validated {dataset_size} samples from {data_source_desc} and exiting before model init.")
         return
 
-    model = get_model(args.model, data_conf, args.instance_seg, args.embedding_dim, args.direction_pred, args.angle_class)
+    model = get_model(args.model,
+                      data_conf,
+                      args.instance_seg,
+                      args.embedding_dim,
+                      args.direction_pred,
+                      args.angle_class,
+                      data_aug_conf)
     state = torch.load(checkpoint, map_location=device)
     model.load_state_dict(state, strict=False)
     model.to(device)
