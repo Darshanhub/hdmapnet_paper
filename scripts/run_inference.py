@@ -436,6 +436,52 @@ def build_arg_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _ensure_lift_splat_class() -> Any:
+    lift_splat_cls = getattr(hdmapnet_model, "LiftSplat", None)
+    if lift_splat_cls is None:
+        lift_splat_cls = importlib.import_module("model.lift_splat").LiftSplat  # type: ignore[attr-defined]
+    return lift_splat_cls
+
+
+def build_hdmapnet_model(args: argparse.Namespace,
+                         data_conf: Dict[str, Any],
+                         data_aug_conf: Optional[Dict[str, Any]]) -> torch.nn.Module:
+    base_get_model = getattr(hdmapnet_model, "get_model")
+    try:
+        get_model_sig = inspect.signature(base_get_model)
+    except (TypeError, ValueError):
+        get_model_sig = None
+
+    base_kwargs = {
+        "instance_seg": args.instance_seg,
+        "embedded_dim": args.embedding_dim,
+        "direction_pred": args.direction_pred,
+        "angle_class": args.angle_class,
+    }
+
+    if get_model_sig and "data_aug_conf" in get_model_sig.parameters:
+        return base_get_model(args.model, data_conf, data_aug_conf=data_aug_conf, **base_kwargs)
+
+    if args.model == "lift_splat":
+        print("Warning: get_model() in third_party/HDMapNet/model/__init__.py is missing data_aug_conf support. "
+              "Temporarily instantiating LiftSplat directly; please merge the latest third_party changes.")
+        if data_aug_conf is None:
+            raise ValueError("LiftSplat requires data_aug_conf (e.g., final_dim).")
+        lift_splat_cls = _ensure_lift_splat_class()
+        out_channels = data_conf.get("num_channels", NUM_CLASSES + 1)
+        return lift_splat_cls(
+            data_conf,
+            data_aug_conf,
+            out_channels,
+            instance_seg=args.instance_seg,
+            embedded_dim=args.embedding_dim,
+            direction_pred=args.direction_pred,
+            direction_dim=args.angle_class,
+        )
+
+    return base_get_model(args.model, data_conf, **base_kwargs)
+
+
 def main(args: argparse.Namespace) -> None:
     checkpoint = Path(args.modelf)
     if not checkpoint.exists():
@@ -471,20 +517,7 @@ def main(args: argparse.Namespace) -> None:
 
         return
 
-    get_model_params = inspect.signature(get_model).parameters
-    model_kwargs = {
-        "instance_seg": args.instance_seg,
-        "embedded_dim": args.embedding_dim,
-        "direction_pred": args.direction_pred,
-        "angle_class": args.angle_class,
-    }
-    if "data_aug_conf" in get_model_params:
-        model_kwargs["data_aug_conf"] = data_aug_conf
-    else:
-        if args.model == "lift_splat":
-            print("Warning: get_model() in third_party/HDMapNet/model/__init__.py is missing data_aug_conf support. "
-                  "Please pull the latest changes. Falling back to legacy signature without augmentation metadata.")
-    model = get_model(args.model, data_conf, **model_kwargs)
+    model = build_hdmapnet_model(args, data_conf, data_aug_conf)
 
     state = torch.load(checkpoint, map_location=device)
 
