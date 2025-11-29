@@ -275,6 +275,8 @@ def draw_prediction(sample_id: str,
         ax.set_title("Vectorized map" if ax is axes[0] else "Bounding boxes")
 
     for coord, ltype in zip(coords, line_types):
+        if coord.size == 0:
+            continue
         color = LINE_CLASS_COLORS.get(ltype, "tab:red")
         axes[0].plot(coord[:, 0], coord[:, 1], color=color, linewidth=2)
 
@@ -285,8 +287,8 @@ def draw_prediction(sample_id: str,
         axes[1].add_patch(rect)
         cx = (min_x + max_x) / 2
         cy = (min_y + max_y) / 2
-    axes[1].text(cx, cy, LINE_CLASS_NAMES.get(ltype, f"class_{ltype}"),
-                     color=color, fontsize=8, ha="center", va="center",
+        label = LINE_CLASS_NAMES.get(ltype, f"class_{ltype}")
+        axes[1].text(cx, cy, label, color=color, fontsize=8, ha="center", va="center",
                      bbox=dict(facecolor="white", alpha=0.6, edgecolor="none"))
 
     fig.suptitle(f"Sample {sample_id}")
