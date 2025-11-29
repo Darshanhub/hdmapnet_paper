@@ -357,6 +357,12 @@ def main(args: argparse.Namespace) -> None:
                     device=segmentation.device,
                     dtype=segmentation.dtype,
                 )
+            if direction is None:
+                direction = torch.zeros(
+                    (segmentation.shape[0], args.angle_class, *segmentation.shape[-2:]),
+                    device=segmentation.device,
+                    dtype=segmentation.dtype,
+                )
             for sample_in_batch in range(segmentation.shape[0]):
                 coords, confidences, line_types = vectorize(segmentation[sample_in_batch],
                                                             embedding[sample_in_batch],
