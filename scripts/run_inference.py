@@ -35,7 +35,18 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 HDMAPNET_DIR = REPO_ROOT / "third_party" / "HDMapNet"
 
 
-vendor_path = str(HDMAPNET_DIR)
+vendor_path = str(HDMAPNET_DIR.resolve())
+filtered_sys_path: List[str] = []
+for entry in sys.path:
+    try:
+        entry_path = Path(entry).resolve()
+    except Exception:
+        filtered_sys_path.append(entry)
+        continue
+    if "HDMapNet" in entry_path.parts and str(entry_path) != vendor_path:
+        continue
+    filtered_sys_path.append(entry)
+sys.path[:] = filtered_sys_path
 if vendor_path in sys.path:
     sys.path.remove(vendor_path)
 sys.path.insert(0, vendor_path)
