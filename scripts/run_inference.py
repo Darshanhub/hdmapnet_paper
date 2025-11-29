@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import shutil
 import sys
@@ -39,22 +40,33 @@ from data.image import normalize_img, img_transform, denormalize_img  # type: ig
 from model import get_model  # type: ignore  # noqa: E402
 from postprocess.vectorize import vectorize  # type: ignore  # noqa: E402
 
-CLASS_NAMES = {
+SEGMENTATION_CLASS_NAMES = {
+    0: "background",
+    1: "pedestrian_crossing",
+    2: "lane_divider",
+    3: "lane_boundary",
+}
+SEGMENTATION_COLORS = {
+    0: "tab:gray",
+    1: "tab:orange",
+    2: "tab:blue",
+    3: "tab:green",
+}
+LINE_CLASS_NAMES = {
     0: "pedestrian_crossing",
     1: "lane_divider",
     2: "lane_boundary",
 }
-CLASS_COLORS = {
+LINE_CLASS_COLORS = {
     0: "tab:orange",
     1: "tab:blue",
     2: "tab:green",
 }
 
-BACKGROUND_COLOR = (45, 45, 45)
-CLASS_CHANNEL_TO_COLOR: Dict[int, Tuple[int, int, int]] = {0: BACKGROUND_COLOR}
-for class_idx, color_name in CLASS_COLORS.items():
+CLASS_CHANNEL_TO_COLOR: Dict[int, Tuple[int, int, int]] = {}
+for class_idx, color_name in SEGMENTATION_COLORS.items():
     r, g, b = (int(c * 255) for c in mcolors.to_rgb(color_name))
-    CLASS_CHANNEL_TO_COLOR[class_idx + 1] = (r, g, b)
+    CLASS_CHANNEL_TO_COLOR[class_idx] = (r, g, b)
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp"}
 
@@ -77,6 +89,8 @@ class ImageFolderSemanticDataset(Dataset):
         self.data_conf = data_conf
         self.canvas_size = self._compute_canvas_size()
         self.resize, self.resize_dims = self._compute_resize()
+        self.synthetic_intrins = self._build_synthetic_intrinsics()
+        self.synthetic_rots, self.synthetic_trans = self._build_synthetic_extrinsics()
 
         self.samples = [
             {
@@ -99,6 +113,55 @@ class ImageFolderSemanticDataset(Dataset):
         resize_dims = (fW, fH)
         return resize, resize_dims
 
+    def _build_synthetic_intrinsics(self) -> torch.Tensor:
+        width, height = self.resize_dims
+        focal = max(width, height) * 1.2
+        cx = width / 2.0
+        cy = height / 2.0
+        intrinsic = torch.tensor(
+            [
+                [focal, 0.0, cx],
+                [0.0, focal, cy],
+                [0.0, 0.0, 1.0],
+            ],
+            dtype=torch.float32,
+        )
+        return intrinsic.unsqueeze(0).repeat(len(CAMS), 1, 1)
+
+    def _build_synthetic_extrinsics(self) -> Tuple[torch.Tensor, torch.Tensor]:
+        yaw_degs = [60.0, 0.0, -60.0, 120.0, 180.0, -120.0]
+        radius = 1.8
+        height = 1.5
+        rots: List[torch.Tensor] = []
+        trans: List[torch.Tensor] = []
+        for idx, yaw in enumerate(yaw_degs):
+            if idx >= len(CAMS):
+                break
+            rot = self._rotation_matrix_from_yaw(yaw)
+            rots.append(rot)
+            yaw_rad = math.radians(yaw)
+            trans.append(
+                torch.tensor(
+                    [radius * math.cos(yaw_rad), radius * math.sin(yaw_rad), height],
+                    dtype=torch.float32,
+                )
+            )
+        while len(rots) < len(CAMS):
+            rots.append(torch.eye(3, dtype=torch.float32))
+            trans.append(torch.tensor([0.0, 0.0, height], dtype=torch.float32))
+        return torch.stack(rots), torch.stack(trans)
+
+    @staticmethod
+    def _rotation_matrix_from_yaw(yaw_deg: float) -> torch.Tensor:
+        yaw = math.radians(yaw_deg)
+        c, s = math.cos(yaw), math.sin(yaw)
+        rot = torch.eye(3, dtype=torch.float32)
+        rot[0, 0] = c
+        rot[0, 1] = -s
+        rot[1, 0] = s
+        rot[1, 1] = c
+        return rot
+
     def __len__(self) -> int:
         return len(self.samples)
 
@@ -117,9 +180,9 @@ class ImageFolderSemanticDataset(Dataset):
         post_rots = post_rot.unsqueeze(0).repeat(num_cams, 1, 1)
         post_trans = post_tran.unsqueeze(0).repeat(num_cams, 1)
 
-        trans = torch.zeros(num_cams, 3, dtype=torch.float32)
-        rots = torch.eye(3, dtype=torch.float32).unsqueeze(0).repeat(num_cams, 1, 1)
-        intrins = torch.eye(3, dtype=torch.float32).unsqueeze(0).repeat(num_cams, 1, 1)
+        trans = self.synthetic_trans.clone()
+        rots = self.synthetic_rots.clone()
+        intrins = self.synthetic_intrins.clone()
         lidar_data = torch.zeros(81920, 5, dtype=torch.float32)
         lidar_mask = torch.zeros(81920, dtype=torch.float32)
         car_trans = torch.zeros(3, dtype=torch.float32)
@@ -212,7 +275,7 @@ def draw_prediction(sample_id: str,
         ax.set_title("Vectorized map" if ax is axes[0] else "Bounding boxes")
 
     for coord, ltype in zip(coords, line_types):
-        color = CLASS_COLORS.get(ltype, "tab:red")
+        color = LINE_CLASS_COLORS.get(ltype, "tab:red")
         axes[0].plot(coord[:, 0], coord[:, 1], color=color, linewidth=2)
 
         min_x, min_y = coord.min(axis=0)
@@ -222,7 +285,7 @@ def draw_prediction(sample_id: str,
         axes[1].add_patch(rect)
         cx = (min_x + max_x) / 2
         cy = (min_y + max_y) / 2
-        axes[1].text(cx, cy, CLASS_NAMES.get(ltype, f"class_{ltype}"),
+    axes[1].text(cx, cy, LINE_CLASS_NAMES.get(ltype, f"class_{ltype}"),
                      color=color, fontsize=8, ha="center", va="center",
                      bbox=dict(facecolor="white", alpha=0.6, edgecolor="none"))
 
