@@ -28,6 +28,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--model_path", required=True, help="Path to the checkpoint (.pt) file to load")
     parser.add_argument("--output_dir", default="outputs/colab",
                         help="Directory where JSON/PNG outputs will be written")
+    parser.add_argument("--debug_dir", default=None,
+                        help="Optional directory to dump debug artifacts (defaults to output_dir/debugging)")
+    parser.add_argument("--debug_limit", type=int, default=0,
+                        help="How many samples to capture in debug_dir (<=0 disables)")
     parser.add_argument("--image_dir", default=None,
                         help="Optional explicit path for plain image folders (falls back to --dataset)")
     parser.add_argument("--limit", type=int, default=10, help="Number of samples to process (<=0 = all)")
@@ -55,6 +59,8 @@ def assemble_runner_args(colab_args: argparse.Namespace) -> argparse.Namespace:
     args.dataroot = colab_args.dataset
     args.modelf = colab_args.model_path
     args.output_dir = colab_args.output_dir
+    args.debug_dir = colab_args.debug_dir
+    args.debug_limit = colab_args.debug_limit
     args.limit = colab_args.limit
     args.version = colab_args.version
     args.model = colab_args.model
