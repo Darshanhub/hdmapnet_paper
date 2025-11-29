@@ -15,6 +15,11 @@ matplotlib.use("Agg")  # headless rendering
 import matplotlib.pyplot as plt  # type: ignore  # noqa: E402
 import matplotlib.patches as patches  # type: ignore  # noqa: E402
 import numpy as np  # type: ignore  # noqa: E402
+
+# Third-party HDMapNet utilities still reference deprecated numpy aliases (e.g., np.int).
+# Guard here so any downstream import continues to work on modern NumPy releases (>=1.26).
+if not hasattr(np, "int"):
+    np.int = int  # type: ignore[attr-defined]
 import torch  # type: ignore  # noqa: E402
 import tqdm  # type: ignore  # noqa: E402
 from PIL import Image  # type: ignore  # noqa: E402
