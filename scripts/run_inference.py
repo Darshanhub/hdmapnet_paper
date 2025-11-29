@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import importlib
+import importlib.util
 import inspect
 import json
 import math
@@ -12,6 +13,7 @@ import shutil
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple, cast
+from types import ModuleType
 
 import matplotlib  # type: ignore
 
@@ -64,10 +66,29 @@ for _module_name in ("model", "data", "postprocess"):
     _purge_foreign_module(_module_name)
 
 
+def _load_local_hdmapnet_model() -> ModuleType:
+    module_name = "model"
+    module_dir = HDMAPNET_DIR / module_name
+    init_file = module_dir / "__init__.py"
+    if not init_file.exists():
+        raise ImportError(f"HDMapNet model package not found at {init_file}")
+    spec = importlib.util.spec_from_file_location(
+        module_name,
+        str(init_file),
+        submodule_search_locations=[str(module_dir)],
+    )
+    if spec is None or spec.loader is None:
+        raise ImportError("Unable to construct import spec for HDMapNet model module")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
 from data.dataset import semantic_dataset  # type: ignore  # noqa: E402
 from data.const import CAMS, IMG_ORIGIN_H, IMG_ORIGIN_W, NUM_CLASSES  # type: ignore  # noqa: E402
 from data.image import normalize_img, img_transform, denormalize_img  # type: ignore  # noqa: E402
-import model as hdmapnet_model  # type: ignore  # noqa: E402
+hdmapnet_model = _load_local_hdmapnet_model()
 from postprocess.vectorize import vectorize  # type: ignore  # noqa: E402
 
 SEGMENTATION_CLASS_NAMES = {
