@@ -469,15 +469,18 @@ def build_hdmapnet_model(args: argparse.Namespace,
             raise ValueError("LiftSplat requires data_aug_conf (e.g., final_dim).")
         lift_splat_cls = _ensure_lift_splat_class()
         out_channels = data_conf.get("num_channels", NUM_CLASSES + 1)
-        return lift_splat_cls(
-            data_conf,
-            data_aug_conf,
-            out_channels,
-            instance_seg=args.instance_seg,
-            embedded_dim=args.embedding_dim,
-            direction_pred=args.direction_pred,
-            direction_dim=args.angle_class,
-        )
+        lift_splat_args = [data_conf, data_aug_conf, out_channels]
+        lift_splat_sig = inspect.signature(lift_splat_cls.__init__)
+        lift_splat_params = set(lift_splat_sig.parameters.keys())
+        lift_splat_kwargs = {
+            "instance_seg": args.instance_seg,
+            "embedded_dim": args.embedding_dim,
+        }
+        if "direction_pred" in lift_splat_params:
+            lift_splat_kwargs["direction_pred"] = args.direction_pred
+        if "direction_dim" in lift_splat_params:
+            lift_splat_kwargs["direction_dim"] = args.angle_class
+        return lift_splat_cls(*lift_splat_args, **lift_splat_kwargs)
 
     return base_get_model(args.model, data_conf, **base_kwargs)
 
