@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib
 import inspect
 import json
 import math
@@ -38,7 +39,7 @@ if str(HDMAPNET_DIR) not in sys.path:
 from data.dataset import semantic_dataset  # type: ignore  # noqa: E402
 from data.const import CAMS, IMG_ORIGIN_H, IMG_ORIGIN_W, NUM_CLASSES  # type: ignore  # noqa: E402
 from data.image import normalize_img, img_transform, denormalize_img  # type: ignore  # noqa: E402
-from model import get_model  # type: ignore  # noqa: E402
+import model as hdmapnet_model  # type: ignore  # noqa: E402
 from postprocess.vectorize import vectorize  # type: ignore  # noqa: E402
 
 SEGMENTATION_CLASS_NAMES = {
@@ -447,6 +448,8 @@ def main(args: argparse.Namespace) -> None:
 
     data_conf = {
         "num_channels": NUM_CLASSES + 1,
+
+
         "image_size": args.image_size,
         "xbound": args.xbound,
         "ybound": args.ybound,
@@ -455,14 +458,17 @@ def main(args: argparse.Namespace) -> None:
         "thickness": args.thickness,
         "angle_class": args.angle_class,
     }
+
     data_aug_conf = {
         "final_dim": tuple(args.image_size),
     }
 
     if args.skip_model_load:
         val_loader, data_source_desc = build_validation_loader(args, data_conf)
+
         dataset_size = len(cast(Any, val_loader.dataset))
         print(f"skip_model_load=True → validated {dataset_size} samples from {data_source_desc} and exiting before model init.")
+
         return
 
     get_model_params = inspect.signature(get_model).parameters
@@ -479,7 +485,9 @@ def main(args: argparse.Namespace) -> None:
             print("Warning: get_model() in third_party/HDMapNet/model/__init__.py is missing data_aug_conf support. "
                   "Please pull the latest changes. Falling back to legacy signature without augmentation metadata.")
     model = get_model(args.model, data_conf, **model_kwargs)
+
     state = torch.load(checkpoint, map_location=device)
+
     model.load_state_dict(state, strict=False)
     model.to(device)
     model.eval()
