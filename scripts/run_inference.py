@@ -36,6 +36,30 @@ HDMAPNET_DIR = REPO_ROOT / "third_party" / "HDMapNet"
 if str(HDMAPNET_DIR) not in sys.path:
     sys.path.insert(0, str(HDMAPNET_DIR))
 
+
+def _purge_foreign_module(module_name: str) -> None:
+    existing = sys.modules.get(module_name)
+    if existing is None:
+        return
+    module_file = getattr(existing, "__file__", None)
+    if not module_file:
+        return
+    try:
+        module_path = Path(module_file).resolve()
+    except FileNotFoundError:
+        module_path = Path(module_file)
+    vendor_root = HDMAPNET_DIR.resolve()
+    if str(module_path).startswith(str(vendor_root)):
+        return
+    to_remove = [key for key in list(sys.modules.keys()) if key == module_name or key.startswith(f"{module_name}.")]
+    for key in to_remove:
+        sys.modules.pop(key, None)
+
+
+for _module_name in ("model", "data", "postprocess"):
+    _purge_foreign_module(_module_name)
+
+
 from data.dataset import semantic_dataset  # type: ignore  # noqa: E402
 from data.const import CAMS, IMG_ORIGIN_H, IMG_ORIGIN_W, NUM_CLASSES  # type: ignore  # noqa: E402
 from data.image import normalize_img, img_transform, denormalize_img  # type: ignore  # noqa: E402
@@ -128,6 +152,7 @@ class ImageFolderSemanticDataset(Dataset):
             ],
             dtype=torch.float32,
         )
+
         return intrinsic.unsqueeze(0).repeat(len(CAMS), 1, 1)
 
     def _build_synthetic_extrinsics(self) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -209,8 +234,6 @@ def _has_images(path: Path) -> bool:
         if next(path.rglob(f"*{ext}"), None) is not None:
             return True
     return False
-
-
 def resolve_image_directory(args: argparse.Namespace) -> Optional[Path]:
     if args.image_dir:
         return Path(args.image_dir)
@@ -452,12 +475,22 @@ def build_hdmapnet_model(args: argparse.Namespace,
     except (TypeError, ValueError):
         get_model_sig = None
 
-    base_kwargs = {
+    kwarg_candidates = {
         "instance_seg": args.instance_seg,
         "embedded_dim": args.embedding_dim,
         "direction_pred": args.direction_pred,
         "angle_class": args.angle_class,
     }
+    base_kwargs: Dict[str, Any] = {}
+    if get_model_sig is None:
+        base_kwargs.update(kwarg_candidates)
+    else:
+        available = set(get_model_sig.parameters.keys())
+        for key, value in kwarg_candidates.items():
+            if key in available:
+                base_kwargs[key] = value
+            elif key == "angle_class" and "direction_dim" in available:
+                base_kwargs["direction_dim"] = value
 
     if get_model_sig and "data_aug_conf" in get_model_sig.parameters:
         return base_get_model(args.model, data_conf, data_aug_conf=data_aug_conf, **base_kwargs)
@@ -472,14 +505,15 @@ def build_hdmapnet_model(args: argparse.Namespace,
         lift_splat_args = [data_conf, data_aug_conf, out_channels]
         lift_splat_sig = inspect.signature(lift_splat_cls.__init__)
         lift_splat_params = set(lift_splat_sig.parameters.keys())
-        lift_splat_kwargs = {
+        lift_splat_kwargs: Dict[str, Any] = {}
+        for key, value in {
             "instance_seg": args.instance_seg,
             "embedded_dim": args.embedding_dim,
-        }
-        if "direction_pred" in lift_splat_params:
-            lift_splat_kwargs["direction_pred"] = args.direction_pred
-        if "direction_dim" in lift_splat_params:
-            lift_splat_kwargs["direction_dim"] = args.angle_class
+            "direction_pred": args.direction_pred,
+            "direction_dim": args.angle_class,
+        }.items():
+            if key in lift_splat_params:
+                lift_splat_kwargs[key] = value
         return lift_splat_cls(*lift_splat_args, **lift_splat_kwargs)
 
     return base_get_model(args.model, data_conf, **base_kwargs)
