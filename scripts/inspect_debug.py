@@ -12,11 +12,14 @@ from typing import Dict, List, Tuple
 import numpy as np
 import torch
 
-CLASS_NAMES = {
+LINE_CLASS_NAMES = {
     0: "pedestrian_crossing",
     1: "lane_divider",
     2: "lane_boundary",
 }
+
+SEGMENTATION_CHANNEL_NAMES = {0: "background"}
+SEGMENTATION_CHANNEL_NAMES.update({idx + 1: name for idx, name in LINE_CLASS_NAMES.items()})
 
 EXPECTED_SUFFIXES = {
     "input": "input_cam0.png",
@@ -39,10 +42,14 @@ def analyze_tensor_file(tensor_path: Path) -> Dict[str, object]:
     pred_classes = torch.argmax(probs, dim=0)
     class_counts = Counter(pred_classes.cpu().numpy().ravel().tolist())
     total_pixels = float(pred_classes.numel())
-    class_distribution = {
-        CLASS_NAMES.get(cls, f"class_{cls}"): round(count / total_pixels, 6)
-        for cls, count in sorted(class_counts.items())
-    }
+    class_distribution: Dict[str, float] = {}
+    for cls_idx, label in SEGMENTATION_CHANNEL_NAMES.items():
+        count = class_counts.get(cls_idx, 0)
+        class_distribution[label] = round(count / total_pixels, 6)
+    for cls_idx, count in sorted(class_counts.items()):
+        if cls_idx in SEGMENTATION_CHANNEL_NAMES:
+            continue
+        class_distribution[f"channel_{cls_idx}"] = round(count / total_pixels, 6)
 
     confidence_map = torch.max(probs, dim=0)[0]
     confidence_stats = summarize_tensor(confidence_map)
