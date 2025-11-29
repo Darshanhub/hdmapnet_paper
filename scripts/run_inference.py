@@ -71,7 +71,11 @@ def _load_local_hdmapnet_model() -> ModuleType:
     module_dir = HDMAPNET_DIR / module_name
     init_file = module_dir / "__init__.py"
     if not init_file.exists():
-        raise ImportError(f"HDMapNet model package not found at {init_file}")
+        spec = importlib.util.find_spec(module_name)
+        if spec is None:
+            raise ImportError(f"HDMapNet model package not found at {init_file} and no '{module_name}' module on sys.path")
+        module = importlib.import_module(module_name)
+        return module
     spec = importlib.util.spec_from_file_location(
         module_name,
         str(init_file),
